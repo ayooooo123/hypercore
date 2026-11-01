@@ -1898,6 +1898,34 @@ test('uses hotswaps to avoid long download tail', async (t) => {
   t.ok(slowPeer.stats.wireData.rx > 0, 'sanity check: still received data from slow peer')
 })
 
+test('busy peers do not re-request blocks that are still on time', async (t) => {
+  const core = await create(t)
+
+  const batch = []
+  while (batch.length < 200) {
+    batch.push(Buffer.alloc(60000, batch.length))
+  }
+  await core.append(batch)
+
+  const seeder = await create(t, core.key)
+  replicate(core, seeder, t)
+  await seeder.download({ start: 0, end: core.length }).done()
+
+  // A window below the hotswap capacity: every peer has spare slots for the whole download.
+  const downloader = await create(t, core.key, { inflightRange: [4, 8] })
+  replicateDebugStream(core, downloader, t, { speed: 5_000_000 })
+  replicateDebugStream(seeder, downloader, t, { speed: 5_000_000 })
+
+  await downloader.download({ start: 0, end: core.length }).done()
+
+  const received = downloader.replicator.peers.reduce(
+    (sum, peer) => sum + peer.stats.wireData.rx,
+    0
+  )
+  t.is(downloader.contiguousLength, 200, 'downloaded everything')
+  t.ok(received <= 220, `received ${received} blocks for 200`)
+})
+
 test('multiple peers with the same remotePublicKey', async (t) => {
   const core = await create(t)
   const peer1 = await create(t, core.key)
